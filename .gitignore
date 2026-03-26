@@ -1,0 +1,11 @@
+# ignore all data files
+data/*
+
+# keep folder structure
+!data/.gitkeep
+!data/raw/
+!data/curated/
+
+# but still ignore files inside them
+data/raw/*
+data/curated/*
