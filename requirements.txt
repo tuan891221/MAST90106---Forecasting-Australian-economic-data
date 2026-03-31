@@ -1,3 +1,16 @@
 pandas
 numpy
 pathlib
+readabs
+numpy
+pyyaml
+requests
+openpyxl
+scikit-learn
+statsmodels
+plotly
+streamlit
+scipy
+readabs
+plotly
+nbformat
