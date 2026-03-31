@@ -1,0 +1,22 @@
+data:
+  start_date: "2000-01-01"
+  end_date: "2025-12-31"
+
+  raw_urls:
+    inflation: "https://www.rba.gov.au/statistics/tables/xls/g01hist.xlsx"
+    cash_rate: "https://www.rba.gov.au/statistics/tables/xls/f01hist.xlsx"
+    output: "https://www.abs.gov.au/statistics/economy/national-accounts/australian-national-accounts-national-income-expenditure-and-product/dec-2025/5206024_Selected_Analytical_Series.xlsx"
+    unemployment: "https://www.abs.gov.au/statistics/labour/employment-and-unemployment/labour-force-australia/latest-release/6202001.xlsx"
+    wages: "https://www.abs.gov.au/statistics/economy/price-indexes-and-inflation/wage-price-index-australia/dec-2025/634501.xlsx"
+
+  variables:
+    cash_rate:
+      quarterly_method: mean
+    inflation:
+      quarterly_method: as_is
+    output:
+      quarterly_method: as_is
+    unemployment:
+      quarterly_method: mean
+    wages:
+      quarterly_method: as_is
