@@ -8,24 +8,20 @@ from src.models.naive_model import NaiveModel
 from src.models.var_model import VARModel
 
 
-def get_model(name: str, config: dict):
+def get_model(model_name: str, config: dict):
+    name = str(model_name).lower()
+
     if name == "naive":
-        return NaiveModel()
+        return NaiveModel(config)
     if name == "mean":
-        return MeanModel()
+        return MeanModel(config)
     if name == "ar":
-        return ARModel(max_lag=config["models"]["ar"]["max_lag"])
+        return ARModel(config)
     if name == "var":
-        return VARModel(max_lag=config["models"]["var"]["max_lag"])
+        return VARModel(config)
     if name == "bvar":
-        bcfg = config["models"]["bvar"]
-        return BVARModel(
-            max_lag=bcfg["max_lag"],
-            lambda_1=bcfg["lambda_1"],
-            lambda_2=bcfg["lambda_2"],
-            lambda_3=bcfg["lambda_3"],
-        )
+        return BVARModel(config)
     if name == "factor":
-        fcfg = config["models"]["factor"]
-        return FactorModel(max_lag=fcfg["max_lag"], n_factors=fcfg["n_factors"])
-    raise ValueError(f"Unknown model: {name}")
+        return FactorModel(config)
+
+    raise ValueError(f"Unknown model: {model_name}")

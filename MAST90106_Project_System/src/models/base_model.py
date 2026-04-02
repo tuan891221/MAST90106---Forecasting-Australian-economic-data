@@ -2,18 +2,22 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-import numpy as np
+import pandas as pd
 
 
-class BaseModel(ABC):
-    def __init__(self, name: str, max_lag: int = 4):
-        self.name = name
-        self.max_lag = max_lag
+class BaseTimeSeriesModel(ABC):
+    def __init__(self, config: dict | None = None, max_lag: int = 4) -> None:
+        self.config = config or {}
+        self.max_lag = int(max_lag)
+
+        self.endog_cols: list[str] = []
+        self.exog_cols: list[str] = []
+        self.history_: pd.DataFrame | None = None
 
     @abstractmethod
-    def fit(self, X: np.ndarray, y: np.ndarray, feature_names: list[str] | None = None) -> None:
-        ...
+    def fit(self, data: pd.DataFrame) -> "BaseTimeSeriesModel":
+        raise NotImplementedError
 
     @abstractmethod
-    def predict(self, X: np.ndarray) -> np.ndarray:
-        ...
+    def forecast(self, h: int, future_exog: pd.DataFrame | None = None) -> pd.DataFrame:
+        raise NotImplementedError

@@ -32,6 +32,7 @@ LOG_DIR = OUTPUT_DIR / "logs"
 FORECAST_1Q_PATH = FORECAST_DIR / "forecast_1q.csv"
 FORECAST_4Q_PATH = FORECAST_DIR / "forecast_4q.csv"
 FORECAST_ALL_PATH = FORECAST_DIR / "forecast_all.csv"
+FUTURE_FORECAST_PATH = FORECAST_DIR / "future_forecast.csv"
 
 METRICS_1Q_PATH = METRICS_DIR / "metrics_1q.csv"
 METRICS_4Q_PATH = METRICS_DIR / "metrics_4q.csv"

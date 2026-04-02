@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
-from src.forecasting.horizon_manager import get_target_column
-from src.forecasting.rolling_forecast import build_feature_matrix
 from src.models.model_registry import get_model
 from src.utils.constants import VARIABLES
 from src.utils.logger import get_logger
@@ -12,65 +9,103 @@ from src.utils.logger import get_logger
 logger = get_logger("forecast.pipeline")
 
 
+def _get_model_input_columns(df: pd.DataFrame, include_covid: bool) -> tuple[list[str], list[str]]:
+    endog_cols = [v for v in VARIABLES if v in df.columns]
+    exog_cols: list[str] = []
+
+    if include_covid:
+        if "is_covid_period" in df.columns:
+            exog_cols.append("is_covid_period")
+        if "is_post_covid_period" in df.columns:
+            exog_cols.append("is_post_covid_period")
+
+    return endog_cols, exog_cols
+
+
 def run_forecast_pipeline(df: pd.DataFrame, config: dict) -> pd.DataFrame:
     enabled_models = config["models"]["enabled"]
     horizons = config["forecast"]["horizons"]
     min_train = int(config["forecast"]["min_train_periods"])
 
-    all_variables = [v for v in VARIABLES if v in df.columns]
+    use_covid_dummy = (
+        config.get("covid", {}).get("enabled", False)
+        and config.get("covid", {}).get("robustness", {}).get("use_dummy", False)
+    )
+
+    endog_cols, exog_cols = _get_model_input_columns(df, include_covid=use_covid_dummy)
+    use_cols = ["date"] + endog_cols + exog_cols
+
+    work = df[use_cols].copy()
+    for col in endog_cols + exog_cols:
+        work[col] = pd.to_numeric(work[col], errors="coerce")
+
+    work = work.dropna(subset=endog_cols).reset_index(drop=True)
+
     results = []
 
-    for variable in all_variables:
+    for model_name in enabled_models:
+        template_model = get_model(model_name, config)
+        start_idx = max(min_train, int(getattr(template_model, "max_lag", 4)) + 4)
+
         for horizon in horizons:
-            target_col = get_target_column(variable, horizon)
+            max_train_end = len(work) - horizon
+            if max_train_end <= start_idx:
+                logger.info("Skipping %s horizon=%s due to insufficient data", model_name, horizon)
+                continue
 
-            for model_name in enabled_models:
+            for train_end in range(start_idx, max_train_end + 1):
+                train_block = work.iloc[:train_end].copy()
+                actual_idx = train_end + horizon - 1
+                actual_date = pd.to_datetime(work.iloc[actual_idx]["date"])
+                actual_row = work.iloc[actual_idx][endog_cols]
+
                 model = get_model(model_name, config)
-                max_lag = model.max_lag
 
-                feat_df, feature_names = build_feature_matrix(
-                    df=df,
-                    target_variable=variable,
-                    all_variables=all_variables,
-                    max_lag=max_lag,
-                    model_name=model_name,
-                    include_covid_dummy=(config["covid"]["enabled"] and config["covid"]["robustness"]["use_dummy"]),
-                )
-
-                work = pd.concat([df[["date", variable, target_col]], feat_df.drop(columns=["date"])], axis=1)
-                work = work.dropna().reset_index(drop=True)
-
-                if len(work) <= min_train:
-                    logger.info("Skipping %s/%s/%s due to insufficient data", variable, horizon, model_name)
+                try:
+                    if model_name in {"var", "bvar", "factor", "ar"}:
+                        train_df = train_block[endog_cols + exog_cols].copy()
+                        future_exog = (
+                            work.iloc[train_end : train_end + horizon][exog_cols].copy().reset_index(drop=True)
+                            if exog_cols
+                            else None
+                        )
+                        model.fit(train_df)
+                        forecast_path = model.forecast(horizon, future_exog=future_exog)
+                    else:
+                        train_df = train_block[endog_cols].copy()
+                        model.fit(train_df)
+                        forecast_path = model.forecast(horizon)
+                except Exception as e:
+                    logger.warning(
+                        "Rolling forecast failed for model=%s horizon=%s train_end=%s: %s",
+                        model_name, horizon, train_end, e
+                    )
                     continue
 
-                feature_cols = [c for c in work.columns if c not in {"date", variable, target_col}]
-                for i in range(min_train, len(work)):
-                    train = work.iloc[:i].copy()
-                    test = work.iloc[[i]].copy()
+                pred_row = forecast_path.iloc[-1]
 
-                    X_train = train[feature_cols].to_numpy(dtype=float)
-                    y_train = train[target_col].to_numpy(dtype=float)
-                    X_test = test[feature_cols].to_numpy(dtype=float)
+                for variable in endog_cols:
+                    actual_value = float(actual_row[variable])
+                    forecast_value = float(pred_row[variable])
 
-                    model.fit(X_train, y_train, feature_names=feature_cols)
-                    y_pred = float(model.predict(X_test)[0])
-                    y_true = float(test[target_col].iloc[0])
+                    row = {
+                        "date": actual_date,
+                        "variable": variable,
+                        "model": model_name,
+                        "horizon": horizon,
+                        "actual": actual_value,
+                        "forecast": forecast_value,
+                        "error": forecast_value - actual_value,
+                    }
 
-                    results.append(
-                        {
-                            "date": test["date"].iloc[0],
-                            "variable": variable,
-                            "horizon": horizon,
-                            "model": model_name,
-                            "actual": y_true,
-                            "forecast": y_pred,
-                            "error": y_pred - y_true,
-                            "is_covid_period": int(test["is_covid_period"].iloc[0]) if "is_covid_period" in test.columns else 0,
-                        }
-                    )
+                    if "is_covid_period" in work.columns:
+                        row["is_covid_period"] = int(work.iloc[actual_idx]["is_covid_period"])
+                    if "is_post_covid_period" in work.columns:
+                        row["is_post_covid_period"] = int(work.iloc[actual_idx]["is_post_covid_period"])
 
-    result_df = pd.DataFrame(results)
-    if not result_df.empty:
-        result_df["date"] = pd.to_datetime(result_df["date"])
-    return result_df
+                    results.append(row)
+
+    out = pd.DataFrame(results)
+    if not out.empty:
+        out["date"] = pd.to_datetime(out["date"])
+    return out

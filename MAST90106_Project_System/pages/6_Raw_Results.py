@@ -1,22 +1,14 @@
 import streamlit as st
 
 from src.dashboard.load_outputs import load_forecasts, load_metrics
-from src.dashboard.tables import prepare_forecast_table, prepare_metric_table
 
 st.title("Raw Results")
 
-tab1, tab2 = st.tabs(["Forecasts", "Metrics"])
+forecast_df = load_forecasts()
+metrics_df = load_metrics()
 
-with tab1:
-    try:
-        forecasts = load_forecasts()
-        st.dataframe(prepare_forecast_table(forecasts), use_container_width=True)
-    except FileNotFoundError:
-        st.warning("Forecast outputs not found.")
+st.subheader("Forecast Results")
+st.dataframe(forecast_df, use_container_width=True, hide_index=True)
 
-with tab2:
-    try:
-        metrics = load_metrics()
-        st.dataframe(prepare_metric_table(metrics), use_container_width=True)
-    except FileNotFoundError:
-        st.warning("Metric outputs not found.")
+st.subheader("Metrics Results")
+st.dataframe(metrics_df, use_container_width=True, hide_index=True)

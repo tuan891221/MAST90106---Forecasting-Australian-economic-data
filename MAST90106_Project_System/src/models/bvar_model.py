@@ -1,51 +1,198 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
+from numpy.linalg import inv
 
-from src.models.base_model import BaseModel
+from src.models.base_model import BaseTimeSeriesModel
+from src.utils.constants import VARIABLES
 
 
-class BVARModel(BaseModel):
+def make_bvar_lagged_data(
+    data: pd.DataFrame,
+    endog_cols: list[str],
+    exog_cols: list[str],
+    p: int,
+):
+    values = data[endog_cols].to_numpy(dtype=float)
+    T, n = values.shape
+
+    Y = values[p:]
+    X_parts = [np.ones((T - p, 1))]
+
+    for lag in range(1, p + 1):
+        X_parts.append(values[p - lag : T - lag])
+
+    if exog_cols:
+        exog_vals = data[exog_cols].to_numpy(dtype=float)
+        X_parts.append(exog_vals[p:])
+
+    X = np.hstack(X_parts)
+    return Y, X
+
+
+def estimate_ar_residual_variances(data: pd.DataFrame, endog_cols: list[str], p: int) -> np.ndarray:
+    sigmas2 = np.zeros(len(endog_cols))
+
+    for i, col in enumerate(endog_cols):
+        y = pd.to_numeric(data[col], errors="coerce").to_numpy(dtype=float)
+        Y = y[p:]
+        X_parts = [np.ones((len(y) - p, 1))]
+        for lag in range(1, p + 1):
+            X_parts.append(y[p - lag : len(y) - lag].reshape(-1, 1))
+        X = np.hstack(X_parts)
+
+        beta_ols = inv(X.T @ X) @ (X.T @ Y)
+        resid = Y - X @ beta_ols
+        ddof = min(X.shape[1], max(len(Y) - 1, 1))
+        sigmas2[i] = np.var(resid, ddof=ddof)
+
+        if not np.isfinite(sigmas2[i]) or sigmas2[i] <= 0:
+            sigmas2[i] = 1.0
+
+    return sigmas2
+
+
+def minnesota_prior_one_equation(
+    n: int,
+    p: int,
+    n_exog: int,
+    eq_i: int,
+    sigmas2: np.ndarray,
+    lam1: float = 0.2,
+    lam2: float = 0.5,
+    lam3: float = 100.0,
+    exog_var: float = 10.0,
+    prior_mean_own_lag1: float = 0.0,
+):
+    k = 1 + n * p + n_exog
+    b0 = np.zeros(k)
+    V0 = np.zeros((k, k))
+
+    V0[0, 0] = lam3**2
+
+    idx = 1
+    for lag in range(1, p + 1):
+        for j in range(n):
+            if j == eq_i:
+                prior_var = (lam1 / lag) ** 2
+            else:
+                prior_var = ((lam1 * lam2) / lag) ** 2 * (sigmas2[eq_i] / sigmas2[j])
+
+            V0[idx, idx] = prior_var
+            idx += 1
+
+    for _ in range(n_exog):
+        V0[idx, idx] = exog_var**2
+        idx += 1
+
+    own_first_lag_pos = 1 + eq_i
+    b0[own_first_lag_pos] = prior_mean_own_lag1
+
+    return b0, V0
+
+
+class BVARModel(BaseTimeSeriesModel):
     """
-    Minnesota-style ridge approximation:
-    stronger shrinkage on other-variable lags than own-variable lags.
+    Multivariate BVAR with Minnesota prior + optional exogenous COVID dummies.
     """
 
-    def __init__(self, max_lag: int = 4, lambda_1: float = 0.2, lambda_2: float = 0.5, lambda_3: float = 1.0):
-        super().__init__(name="bvar", max_lag=max_lag)
-        self.lambda_1 = lambda_1
-        self.lambda_2 = lambda_2
-        self.lambda_3 = lambda_3
-        self.coef_: np.ndarray | None = None
-        self.feature_names: list[str] = []
+    def __init__(self, config: dict | None = None) -> None:
+        cfg = config or {}
+        max_lag = cfg.get("models", {}).get("bvar", {}).get("max_lag", 4)
+        super().__init__(config=cfg, max_lag=max_lag)
 
-    def fit(self, X: np.ndarray, y: np.ndarray, feature_names: list[str] | None = None) -> None:
-        self.feature_names = feature_names or [f"x{i}" for i in range(X.shape[1])]
-        X1 = np.column_stack([np.ones(len(X)), X])
+        # accept both naming styles
+        self.lam1 = float(cfg.get("models", {}).get("bvar", {}).get("lam1",
+                          cfg.get("models", {}).get("bvar", {}).get("lambda_1", 0.2)))
+        self.lam2 = float(cfg.get("models", {}).get("bvar", {}).get("lam2",
+                          cfg.get("models", {}).get("bvar", {}).get("lambda_2", 0.5)))
+        self.lam3 = float(cfg.get("models", {}).get("bvar", {}).get("lam3",
+                          cfg.get("models", {}).get("bvar", {}).get("lambda_3", 100.0)))
+        self.exog_var = float(cfg.get("models", {}).get("bvar", {}).get("exog_var", 10.0))
 
-        penalties = [0.0]
-        target_var = None
-        for name in self.feature_names:
-            if name.endswith("_lag1"):
-                target_var = name.rsplit("_lag", 1)[0]
-                break
+        self.B_post: np.ndarray | None = None
+        self.sigmas2_: np.ndarray | None = None
 
-        for name in self.feature_names:
-            lag = 1
-            if "_lag" in name:
-                try:
-                    lag = int(name.split("_lag")[-1])
-                except ValueError:
-                    lag = 1
-            var_name = name.rsplit("_lag", 1)[0] if "_lag" in name else name
-            scale = self.lambda_1 / (lag ** self.lambda_3)
-            if target_var is not None and var_name != target_var:
-                scale = scale / self.lambda_2
-            penalties.append(scale)
+    def fit(self, data: pd.DataFrame) -> "BVARModel":
+        self.history_ = data.copy()
+        self.endog_cols = [c for c in VARIABLES if c in data.columns]
+        self.exog_cols = [c for c in data.columns if c not in self.endog_cols]
 
-        penalty_matrix = np.diag(penalties)
-        self.coef_ = np.linalg.pinv(X1.T @ X1 + penalty_matrix) @ X1.T @ y
+        if not self.endog_cols:
+            raise ValueError("No endogenous variables found for BVAR.")
 
-    def predict(self, X: np.ndarray) -> np.ndarray:
-        X1 = np.column_stack([np.ones(len(X)), X])
-        return X1 @ self.coef_
+        clean = data[self.endog_cols + self.exog_cols].copy()
+        for col in clean.columns:
+            clean[col] = pd.to_numeric(clean[col], errors="coerce")
+        clean = clean.dropna().reset_index(drop=True)
+
+        if len(clean) <= self.max_lag + 1:
+            raise ValueError("Not enough data to fit BVAR.")
+
+        Y, X = make_bvar_lagged_data(clean, self.endog_cols, self.exog_cols, self.max_lag)
+
+        n = len(self.endog_cols)
+        n_exog = len(self.exog_cols)
+
+        sigmas2 = estimate_ar_residual_variances(clean, self.endog_cols, self.max_lag)
+        k = X.shape[1]
+        B_post = np.zeros((k, n))
+
+        for i in range(n):
+            y_i = Y[:, i]
+
+            b0, V0 = minnesota_prior_one_equation(
+                n=n,
+                p=self.max_lag,
+                n_exog=n_exog,
+                eq_i=i,
+                sigmas2=sigmas2,
+                lam1=self.lam1,
+                lam2=self.lam2,
+                lam3=self.lam3,
+                exog_var=self.exog_var,
+                prior_mean_own_lag1=0.0,
+            )
+
+            V0_inv = inv(V0)
+            V_post = inv(V0_inv + X.T @ X / sigmas2[i])
+            b_post = V_post @ (V0_inv @ b0 + (X.T @ y_i) / sigmas2[i])
+            B_post[:, i] = b_post
+
+        self.B_post = B_post
+        self.sigmas2_ = sigmas2
+        return self
+
+    def forecast(self, h: int, future_exog: pd.DataFrame | None = None) -> pd.DataFrame:
+        if self.history_ is None or self.B_post is None:
+            raise ValueError("Model must be fitted before forecasting.")
+
+        hist = self.history_.copy()
+        endog_values = hist[self.endog_cols].to_numpy(dtype=float).copy()
+
+        if self.exog_cols:
+            if future_exog is None:
+                last_exog = hist[self.exog_cols].iloc[[-1]].copy()
+                future_exog = pd.concat([last_exog] * h, ignore_index=True)
+            else:
+                future_exog = future_exog[self.exog_cols].copy().reset_index(drop=True)
+        else:
+            future_exog = pd.DataFrame(index=range(h))
+
+        forecasts = []
+
+        for step in range(h):
+            x = [1.0]
+            for lag in range(1, self.max_lag + 1):
+                x.extend(endog_values[-lag, :])
+
+            if self.exog_cols:
+                x.extend(future_exog.iloc[step].to_numpy(dtype=float).tolist())
+
+            x = np.array(x, dtype=float)
+            y_hat = x @ self.B_post
+            forecasts.append(y_hat)
+            endog_values = np.vstack([endog_values, y_hat])
+
+        return pd.DataFrame(forecasts, columns=self.endog_cols)

@@ -10,7 +10,8 @@ data:
   raw_urls:
     inflation: "https://www.rba.gov.au/statistics/tables/xls/g01hist.xlsx"
     cash_rate: "https://www.rba.gov.au/statistics/tables/xls/f01hist.xlsx"
-    output: "https://www.abs.gov.au/statistics/economy/national-accounts/australian-national-accounts-national-income-expenditure-and-product/dec-2025/5206002_Expenditure_Volume_Measures.xlsx"
+    output: "https://www.abs.gov.au/statistics/economy/national-accounts/australian-national-accounts-national-income-expenditure-and-product/dec-2025/5206024_Selected_Analytical_Series.xlsx"
+#   output: "https://www.abs.gov.au/statistics/economy/national-accounts/australian-national-accounts-national-income-expenditure-and-product/dec-2025/5206002_Expenditure_Volume_Measures.xlsx"
     unemployment: "https://www.abs.gov.au/statistics/labour/employment-and-unemployment/labour-force-australia/latest-release/6202001.xlsx"
     wages: "https://www.abs.gov.au/statistics/economy/price-indexes-and-inflation/wage-price-index-australia/dec-2025/634501.xlsx"
 

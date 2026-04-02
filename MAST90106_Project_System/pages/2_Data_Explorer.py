@@ -1,18 +1,25 @@
 import streamlit as st
+import plotly.express as px
 
 from src.dashboard.load_outputs import load_model_input
 
 st.title("Data Explorer")
 
-try:
-    df = load_model_input()
-except FileNotFoundError:
-    st.warning("Processed model input not found. Run `python run.py` first.")
-    st.stop()
+df = load_model_input()
 
-variables = [c for c in df.columns if c in ["output", "inflation", "cash_rate", "unemployment", "wages"]]
-selected = st.selectbox("Variable", variables)
+variables = ["output", "inflation", "cash_rate", "unemployment", "wages"]
+variable = st.selectbox("Variable", variables, index=0)
 
-st.line_chart(df.set_index("date")[[selected]])
+plot_df = df[["date", variable]].dropna().copy()
+
+fig = px.line(
+    plot_df,
+    x="date",
+    y=variable,
+    title=f"{variable} over time",
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
 st.subheader("Data Preview")
-st.dataframe(df[["date", selected]].tail(20), use_container_width=True)
+st.dataframe(plot_df.tail(15), use_container_width=True, hide_index=True)

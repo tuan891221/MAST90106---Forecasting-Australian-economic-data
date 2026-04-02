@@ -1,22 +1,16 @@
 import streamlit as st
 
-from src.dashboard.charts import metric_bar_chart
-from src.dashboard.filters import filter_metrics
 from src.dashboard.load_outputs import load_metrics
-from src.dashboard.tables import prepare_metric_table
+from src.dashboard.charts import metric_bar_chart
 
 st.title("Model Performance")
 
-try:
-    metrics = load_metrics()
-except FileNotFoundError:
-    st.warning("Metric outputs not found. Run `python run.py` first.")
-    st.stop()
+metrics_df = load_metrics()
 
-variable = st.selectbox("Variable", sorted(metrics["variable"].unique()))
-horizon = st.selectbox("Horizon", sorted(metrics["horizon"].unique()))
-metric = st.selectbox("Metric", ["rmse", "bias", "mae"])
+metric = st.selectbox("Metric", ["rmse", "mae", "bias"], index=0)
 
-sub = filter_metrics(metrics, variable=variable, horizon=horizon)
-st.plotly_chart(metric_bar_chart(sub, metric), use_container_width=True)
-st.dataframe(prepare_metric_table(sub), use_container_width=True)
+fig = metric_bar_chart(metrics_df, metric)
+st.plotly_chart(fig, use_container_width=True)
+
+st.subheader("Metrics Table")
+st.dataframe(metrics_df, use_container_width=True, hide_index=True)
